@@ -1,8 +1,8 @@
-FROM ubuntu:16.04
-MAINTAINER Elico Corp <webmaster@elico-corp.com>
+FROM bitnami/minideb:buster
+MAINTAINER Marco Galicia <marco.galicia@posteo.net>
 
 # Define build constants
-ENV GIT_BRANCH=11.0 \
+  ENV GIT_BRANCH=11.0 \
   PYTHON_BIN=python3 \
   SERVICE_BIN=odoo-bin
 
@@ -12,13 +12,17 @@ RUN ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 # Generate locales
 RUN apt update \
   && apt -yq install locales \
-  && locale-gen en_US.UTF-8 \
-  && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+  && locale-gen en_US.UTF-8  
+##  && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 
 # Install APT dependencies
 ADD sources/apt.txt /opt/sources/apt.txt
-RUN apt update \
-  && awk '! /^ *(#|$)/' /opt/sources/apt.txt | xargs -r apt install -yq
+RUN apt update && cat /opt/sources/apt.txt | xargs -r install_packages 
+
+### Add postgresql repos
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ buster-pgdg main" >> /etc/apt/sources.list \
+&& wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -  \
+&& apt update && install_packages postgresql-client-13
 
 # Create the odoo user
 RUN useradd --create-home --home-dir /opt/odoo --no-log-init odoo
@@ -33,12 +37,15 @@ RUN /bin/bash -c "mkdir -p /opt/odoo/{etc,sources/odoo,additional_addons,data,ss
 
 # Add Odoo sources and remove .git folder in order to reduce image size
 WORKDIR /opt/odoo/sources
-RUN git clone --depth=1 https://github.com/odoo/odoo.git -b $GIT_BRANCH \
-  && rm -rf odoo/.git
+RUN git clone --depth=1 https://github.com/OCA/OCB.git -b $GIT_BRANCH \ 
+&& rm -rf OCB/.git
 
+#### move odoo sources to odoo folder
+RUN rmdir /opt/odoo/sources/odoo && mv /opt/odoo/sources/OCB /opt/odoo/sources/odoo
+
+###
 ADD sources/odoo.conf /opt/odoo/etc/odoo.conf
 ADD auto_addons /opt/odoo/auto_addons
-
 User 0
 
 # Install Odoo python dependencies
@@ -49,13 +56,13 @@ ADD sources/pip.txt /opt/sources/pip.txt
 RUN pip3 install -r /opt/sources/pip.txt
 
 # Install LESS
-RUN npm install -g less@2.7.3 less-plugin-clean-css@1.5.1 \
-  && ln -s /usr/bin/nodejs /usr/bin/node
+#RUN npm install -g less@2.7.3 less-plugin-clean-css@1.5.1 \
+#  && ln -s /usr/bin/nodejs /usr/bin/node
 
 # Install wkhtmltopdf based on QT5
-# Warning: do not use latest version (0.12.2.1) because it causes the footer
+# use recommended version 12.5
 # issue (see https://github.com/odoo/odoo/issues/4806)
-ADD https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.1/wkhtmltox-0.12.1_linux-trusty-amd64.deb \
+ADD https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.buster_amd64.deb \
   /opt/sources/wkhtmltox.deb
 RUN dpkg -i /opt/sources/wkhtmltox.deb
 
@@ -95,6 +102,15 @@ RUN dpkg -i /opt/sources/dumb-init.deb
 ADD bin/boot /usr/bin/boot
 ENTRYPOINT [ "/usr/bin/dumb-init", "/usr/bin/boot" ]
 CMD [ "help" ]
+
+### remove unnecesary dependenciies to make the image smaller
+RUN apt remove -y build-essential gcc && apt -y autoremove
+
+## remove apt packages
+RUN apt clean && rm -rf /var/lib/apt/lists/* && rm /opt/sources/dumb-init.deb /opt/sources/wkhtmltox.deb
+
+## clean pip cache
+RUN rm -rf /root/.cache
 
 # Expose the odoo ports (for linked containers)
 EXPOSE 8069 8072
